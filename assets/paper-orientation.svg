@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  放纸示意图（DupriMan）
+  左：正面已打印的一张纸，A 代表文字方向，A 的顶端即页头。
+  右：纸盒俯视，上方方块是打印机；纸以已打印面朝下、页头朝里的方向放入。
+
+  这份 SVG 是唯一的源文件。修改后运行 scripts/render-diagram.sh
+  重新生成 assets/paper-orientation.png（构建时内嵌进二进制）。
+
+  A 用衬线体：衬线体的字形上下不对称，能一眼看出哪端是页头；
+  无衬线的 A 左右对称，方向感很弱。字形在渲染时就被栅格化，
+  所以运行时不需要系统里有这个字体。
+  配色刻意用中性灰：同一张图要在浅色和深色主题下都看得清。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="430" height="210" viewBox="0 0 430 210">
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- ================= 左：刚打印完的纸（正面朝上） ================= -->
+    <rect x="14" y="18" width="96" height="136" rx="3"
+          fill="#8a8a8a" fill-opacity="0.08" stroke="#8a8a8a" stroke-width="1.4"/>
+
+    <!-- 页头：A 顶端那一条边 -->
+    <line x1="24" y1="40" x2="100" y2="40"
+          stroke="#8a8a8a" stroke-width="1.1" stroke-opacity="0.4"
+          stroke-dasharray="3 3"/>
+
+    <!-- 字母 A：文字方向的标记（衬线体，顶端即页头） -->
+    <text x="62" y="118" font-family="Liberation Serif, Georgia, DejaVu Serif, serif"
+          font-size="72" fill="#5f5f5f" text-anchor="middle">A</text>
+
+    <!-- ================= 中：把纸翻过来 ================= -->
+    <path d="M132 100 C132 66, 176 52, 190 74"
+          stroke="#9a9a9a" stroke-width="2"/>
+    <path d="M190 74 L181 70 M190 74 L189 64"
+          stroke="#9a9a9a" stroke-width="2"/>
+
+    <!-- ================= 右：纸盒俯视 ================= -->
+    <!-- 打印机机身（远端） -->
+    <rect x="216" y="6" width="200" height="40" rx="5"
+          fill="#8a8a8a" fill-opacity="0.13" stroke="#8a8a8a" stroke-width="1.4"/>
+    <!-- 出纸槽的纹路，暗示这是一台打印机 -->
+    <g stroke="#9a9a9a" stroke-width="1.2" stroke-opacity="0.55">
+      <line x1="236" y1="16" x2="236" y2="26"/>
+      <line x1="260" y1="16" x2="260" y2="26"/>
+      <line x1="284" y1="16" x2="284" y2="26"/>
+      <line x1="308" y1="16" x2="308" y2="26"/>
+      <line x1="332" y1="16" x2="332" y2="26"/>
+      <line x1="356" y1="16" x2="356" y2="26"/>
+      <line x1="380" y1="16" x2="380" y2="26"/>
+    </g>
+
+    <!-- 纸盒：近大远小，远端紧贴打印机 -->
+    <polygon points="238,46 394,46 420,196 212,196"
+             fill="#8a8a8a" fill-opacity="0.09" stroke="#8a8a8a" stroke-width="1.4"/>
+
+    <!-- 盒中的纸，露出的是空白背面 -->
+    <polygon points="258,62 376,62 398,182 234,182"
+             fill="#8a8a8a" fill-opacity="0.18" stroke="#6f6f6f" stroke-width="1.6"/>
+
+    <!-- 页头朝里：箭头指进打印机 -->
+    <line x1="317" y1="58" x2="317" y2="48" stroke="#6f6f6f" stroke-width="1.8"/>
+    <path d="M317 48 L312 55.5 M317 48 L322 55.5" stroke="#6f6f6f" stroke-width="1.8"/>
+
+    <!-- 朝下那一面上的 A：透过纸看是镜像的，用浅灰实线表示"在背面" -->
+    <g transform="translate(634,0) scale(-1,1)">
+      <text x="317" y="142" font-family="Liberation Serif, Georgia, DejaVu Serif, serif"
+            font-size="52" fill="#8f8f8f" fill-opacity="0.55"
+            text-anchor="middle">A</text>
+    </g>
+
+    <!-- 这一面朝下 -->
+    <path d="M317 158 L317 178" stroke="#8f8f8f" stroke-width="1.6" stroke-opacity="0.7"/>
+    <path d="M317 178 L312 170 M317 178 L322 170"
+          stroke="#8f8f8f" stroke-width="1.6" stroke-opacity="0.7"/>
+  </g>
+</svg>

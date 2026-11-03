@@ -245,9 +245,12 @@ fn confirm_or_abort(cfg: &Config, args: &BackendArgs, detail: &str) -> Result<()
         user: args.user.clone(),
         title: args.title.clone(),
         detail: detail.to_string(),
+        // Lets the prompt skip requests whose backend CUPS has already killed.
+        pid: std::process::id(),
     };
     log(&cfg.prompt.cli("cli_waiting_confirmation"));
-    let (state, identity) = prompt_proto::send_request(&cfg.paths.state_dir, &req)?;
+    let (state, identity) =
+        prompt_proto::send_request(&cfg.paths.state_dir, &req, &cfg.paths.backend_user)?;
     let timeout =
         (cfg.prompt.timeout_secs > 0).then(|| Duration::from_secs(cfg.prompt.timeout_secs));
     let outcome = prompt_proto::wait_response(

@@ -61,6 +61,12 @@ pub struct PathsCfg {
     pub state_dir: PathBuf,
     /// 拆分出的临时 PDF 存放目录
     pub spool_dir: PathBuf,
+    /// cupsd 运行 backend 所使用的账户名。留空则自动探测（先 `lp`，再 `cups`）。
+    ///
+    /// 上游 CUPS 默认用 `lp`，但发行版可能不同：Arch 的 cups 包用 `cups`。
+    /// 只有当 requests 目录尚不存在、且以 root 供应目录时才会用到该值；
+    /// 目录已存在时，请求目录的属主即权威来源。
+    pub backend_user: String,
 }
 
 impl Default for PathsCfg {
@@ -68,6 +74,7 @@ impl Default for PathsCfg {
         Self {
             state_dir: PathBuf::from("/run/dupriman"),
             spool_dir: PathBuf::from("/var/tmp/dupriman"),
+            backend_user: String::new(),
         }
     }
 }
@@ -203,6 +210,16 @@ impl PromptCfg {
         } else {
             self.cancel_label.clone()
         }
+    }
+
+    /// 示意图第一行说明（A 代表文字方向）
+    pub fn resolved_diagram_caption_1(&self) -> String {
+        self.texts().diagram_caption_1.clone()
+    }
+
+    /// 示意图第二行说明（A 面朝下、页头朝里）
+    pub fn resolved_diagram_caption_2(&self) -> String {
+        self.texts().diagram_caption_2.clone()
     }
 
     /// 任务详情文案（配置优先，否则按语言；含占位符替换）
@@ -351,6 +368,9 @@ virtual_info = "{vinfo}"
 state_dir = "{state}"
 # Temporary directory for split PDFs
 spool_dir = "{spool}"
+# Account cupsd runs backends as.  Leave empty to auto-detect ("lp", then "cups").
+# Only consulted when provisioning a missing requests/ directory as root.
+backend_user = "{backend_user}"
 
 [duplex]
 # Default even-page order: reverse (face-down output trays like HP LaserJet) | normal
@@ -393,6 +413,7 @@ keep_temp = {keep}
             vinfo = cfg.printer.virtual_info,
             state = cfg.paths.state_dir.display(),
             spool = cfg.paths.spool_dir.display(),
+            backend_user = cfg.paths.backend_user,
             order = match cfg.duplex.even_order {
                 EvenOrder::Reverse => "reverse",
                 EvenOrder::Normal => "normal",

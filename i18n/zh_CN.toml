@@ -1,9 +1,13 @@
 # DupriMan 翻译 — 简体中文
 
 title = "双面打印"
-message = "将纸取出打印机，不要调整方向，直接插入进纸槽"
+message = "把纸从出纸槽取出，按下面的示意图放回进纸盒。"
 ok_label = "确定"
 cancel_label = "取消"
+
+# 放纸示意图说明。A 代表文字方向，A 的顶端即页头。
+diagram_caption_1 = "图中 A 代表文字方向，A 的顶端就是页头"
+diagram_caption_2 = "放入纸盒：A 面（已打印面）朝下，页头朝向打印机"
 
 # 弹窗中的任务详情。占位符：{job_id} {title} {total} {evens}
 detail = "作业 #{job_id}《{title}》共 {total} 页：已打印全部正面，待打印背面 {evens} 页。"
@@ -43,6 +47,7 @@ ppd_duplex_short_edge = "短边翻转"
 # ---- CLI 错误信息 ----
 cli_args_error = "参数错误"
 cli_prompt_failed = "弹窗守护进程启动失败"
+cli_group_missing = "当前登录会话没有 bridge 组 {group}（gid {gid}）：请注销后重新登录，让新的组成员关系生效"
 cli_install_failed = "安装失败"
 cli_uninstall_failed = "卸载失败"
 cli_config_warning = "警告：配置加载失败，使用默认值"
@@ -59,10 +64,16 @@ test_printers_header = "打印机："
 test_real_printer_fmt = "真实打印机 {name} 已存在"
 test_real_printer_hint = "运行 lpstat -v 并在配置中更新 printer.real"
 test_virtual_printer_fmt = "虚拟打印机 {name} 已注册"
-test_virtual_printer_hint = "运行 sudo dupriman install"
+test_virtual_printer_hint = "用 `sudo lpadmin -p <队列名> -v dupriman://duplex -P /usr/share/cups/model/dupriman.ppd -E` 注册队列"
 test_runtime_header = "运行环境："
 test_state_dir_fmt = "状态目录 {path} 已存在"
-test_state_dir_hint = "运行 sudo dupriman install"
+test_state_dir_hint = "以 root 所有、组/其他不可写的 0711 权限创建该目录"
+test_backend_account_fmt = "后端账户 {name} 已存在"
+test_backend_account_hint = "找不到 lp 或 cups 账户；请在配置中设置 paths.backend_user"
+test_bridge_dir_fmt = "{user} 的 bridge 目录已供应（{path}）"
+test_bridge_dir_hint = "须创建 {path}（属主为后端账户、属组 dupriman-{user}、权限 2750），完整命令：sudo install -d -o root -g root -m 0711 {user_dir} && sudo install -d -o {backend} -g dupriman-{user} -m 2750 {path} && sudo install -d -o {user} -g dupriman-{user} -m 2770 {responses}"
+test_bridge_group_fmt = "当前会话可读取 bridge 目录（组 {group}）"
+test_bridge_group_hint = "当前登录会话早于该组创建：请注销后重新登录，再重启 `dupriman prompt`（组成员关系在登录时固定）"
 test_prompt_label = "弹窗守护进程正在运行"
 test_prompt_hint = "运行 systemctl --user start dupriman-prompt"
 

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DupriMan Prompt
+Comment=Duplex confirmation dialog for the DupriMan virtual printer
+Exec=/usr/bin/dupriman prompt
+# The dialog only needs the session bus, a display, and the state directory.
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel

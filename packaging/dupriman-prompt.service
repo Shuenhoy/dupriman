@@ -1,0 +1,23 @@
+[Unit]
+Description=DupriMan duplex confirmation prompt
+Documentation=https://github.com/OrdChaos/dupriman
+# Tied to the graphical session: started when it comes up, stopped when it
+# tears down.  DupriMan does not install or enable this unit; it is a local
+# example you copy into ~/.config/systemd/user/.
+PartOf=graphical-session.target
+After=graphical-session.target
+# Give up instead of restarting forever when, say, the bridge layout is not
+# provisioned yet.  `dupriman test` reports the exact missing pieces.
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dupriman prompt
+# `dupriman prompt` finds the Wayland socket itself when WAYLAND_DISPLAY and
+# DISPLAY are both unset, so this unit needs no display condition.
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=graphical-session.target

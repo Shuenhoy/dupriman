@@ -1,9 +1,13 @@
 # DupriMan 翻譯 — 繁體中文
 
 title = "雙面列印"
-message = "將紙取出印表機，不要調整方向，直接插入進紙槽"
+message = "將紙從出紙槽取出，按下面的示意圖放回進紙匣。"
 ok_label = "確定"
 cancel_label = "取消"
+
+# 放紙示意圖說明。A 代表文字方向，A 的頂端即頁首。
+diagram_caption_1 = "圖中 A 代表文字方向，A 的頂端就是頁首"
+diagram_caption_2 = "放入紙匣：A 面（已列印面）朝下，頁首朝向印表機"
 
 # 彈窗中的任務詳情。佔位符：{job_id} {title} {total} {evens}
 detail = "工作 #{job_id}《{title}》共 {total} 頁：已列印全部正面，待列印背面 {evens} 頁。"
@@ -43,6 +47,7 @@ ppd_duplex_short_edge = "短邊翻轉"
 # ---- CLI 錯誤訊息 ----
 cli_args_error = "參數錯誤"
 cli_prompt_failed = "彈窗守護行程啟動失敗"
+cli_group_missing = "目前登入工作階段沒有 bridge 群組 {group}（gid {gid}）：請登出後重新登入，讓新的群組成員關係生效"
 cli_install_failed = "安裝失敗"
 cli_uninstall_failed = "解除安裝失敗"
 cli_config_warning = "警告：設定載入失敗，使用預設值"
@@ -59,10 +64,16 @@ test_printers_header = "印表機："
 test_real_printer_fmt = "真實印表機 {name} 已存在"
 test_real_printer_hint = "執行 lpstat -v 並在設定中更新 printer.real"
 test_virtual_printer_fmt = "虛擬印表機 {name} 已註冊"
-test_virtual_printer_hint = "執行 sudo dupriman install"
+test_virtual_printer_hint = "以 `sudo lpadmin -p <佇列名> -v dupriman://duplex -P /usr/share/cups/model/dupriman.ppd -E` 註冊佇列"
 test_runtime_header = "執行環境："
 test_state_dir_fmt = "狀態目錄 {path} 已存在"
-test_state_dir_hint = "執行 sudo dupriman install"
+test_state_dir_hint = "以 root 擁有、群組/其他不可寫的 0711 權限建立該目錄"
+test_backend_account_fmt = "後端帳戶 {name} 已存在"
+test_backend_account_hint = "找不到 lp 或 cups 帳戶；請在設定中設定 paths.backend_user"
+test_bridge_dir_fmt = "{user} 的 bridge 目錄已供應（{path}）"
+test_bridge_dir_hint = "須建立 {path}（擁有者為後端帳戶、群組 dupriman-{user}、權限 2750），完整指令：sudo install -d -o root -g root -m 0711 {user_dir} && sudo install -d -o {backend} -g dupriman-{user} -m 2750 {path} && sudo install -d -o {user} -g dupriman-{user} -m 2770 {responses}"
+test_bridge_group_fmt = "目前工作階段可讀取 bridge 目錄（群組 {group}）"
+test_bridge_group_hint = "目前登入工作階段早於該群組建立：請登出後重新登入，再重新啟動 `dupriman prompt`（群組成員關係在登入時固定）"
 test_prompt_label = "彈窗守護行程正在執行"
 test_prompt_hint = "執行 systemctl --user start dupriman-prompt"
 

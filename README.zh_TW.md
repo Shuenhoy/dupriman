@@ -57,31 +57,58 @@ DupriMan 不會自行安裝檔案、建立 CUPS 佇列、管理執行期目錄�
 安裝二進位、CUPS backend 符號連結及 `dupriman ppd` 生成的 PPD 後，明確執行：
 
 ```bash
+# cupsd 執行 backend 所使用的帳戶：Debian/Ubuntu 為 lp，Arch 為 cups
+getent passwd lp >/dev/null && BACKEND=lp || BACKEND=cups
+echo "backend account: $BACKEND"
+
 sudo install -d -o root -g root -m 0711 /run/dupriman
-sudo install -d -o lp -g lp -m 0700 /var/tmp/dupriman
+sudo install -d -o "$BACKEND" -g "$BACKEND" -m 0700 /var/tmp/dupriman
 sudo install -d -m 0755 /etc/dupriman
 sudo sh -c 'dupriman sample-config > /etc/dupriman/config.toml'
 sudo lpadmin -p dupriman-duplex -v dupriman://duplex \
   -P /usr/share/cups/model/dupriman.ppd -E
 ```
 
-設定 `printer.real` 與明確的 `prompt.allowed_users`。CUPS 通常以 `lp` 使用者
-執行 backend。每個允許的帳戶均須建立專用 bridge group 和私有目錄布局；以下以
-`alice` 為例：
+設定 `printer.real` 與明確的 `prompt.allowed_users`。
+
+**後端帳戶是探測出來的，不是寫死的。** 上游 CUPS（以及 Debian/Ubuntu）以 `lp`
+執行 backend，但 Arch Linux 與 Fedora 只提供 `cups` 帳戶——在那裡
+`getent passwd lp` 是空的。DupriMan 優先使用 `paths.backend_user`；未設定時依
+`lp`、`cups` 順序取第一個存在的帳戶；目錄存在後以 `requests/` 的擁有者為準，
+列印時不再做任何猜測。
+
+每個允許的帳戶均須建立專用 bridge group 和私有目錄布局；以下以 `alice` 為例
+（`$BACKEND` 已在上方設定）：
 
 ```bash
 sudo groupadd --system dupriman-alice
 sudo usermod -a -G dupriman-alice alice
-sudo usermod -a -G dupriman-alice lp
+sudo usermod -a -G dupriman-alice "$BACKEND"
 sudo install -d -o root -g root -m 0711 /run/dupriman/alice
-sudo install -d -o lp -g dupriman-alice -m 2750 /run/dupriman/alice/requests
+sudo install -d -o "$BACKEND" -g dupriman-alice -m 2750 /run/dupriman/alice/requests
 sudo install -d -o alice -g dupriman-alice -m 2770 /run/dupriman/alice/responses
 ```
 
-backend 以 `lp` 寫入請求，圖形使用者讀取請求並寫入回應。其他本機使用者沒有存取
+`/run` 在多數系統上是 tmpfs，重新開機後上述布局會消失。可用 tmpfiles.d 條目持久化
+（systemd 系統），並省去上面的 `install -d`：
+
+```bash
+sudo tee /etc/tmpfiles.d/dupriman.conf >/dev/null <<EOF
+d /run/dupriman 0711 root root -
+d /run/dupriman/alice 0711 root root -
+d /run/dupriman/alice/requests 2750 $BACKEND dupriman-alice -
+d /run/dupriman/alice/responses 2770 alice dupriman-alice -
+EOF
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/dupriman.conf
+```
+
+backend 以 CUPS backend 帳戶寫入請求，圖形使用者讀取請求並寫入回應。其他本機使用者沒有存取
 權限，且列印背面前仍會驗證回應 UID 與隨機 capability。變更群組成員後需要登出再登入。
 最後以所選 init、桌面 autostart 或工作階段管理器監管每個允許圖形工作階段中的
 `dupriman prompt`。
+
+執行 `dupriman test` 可檢查以上各項：它會顯示探測到的後端帳戶、狀態目錄，以及每個
+允許使用者的 bridge 布局是否已供應。
 
 ## 設定
 
@@ -96,6 +123,11 @@ backend 只讀取 `/etc/dupriman/config.toml` 和明確的 `--config` 參數。�
 # 特殊值 "save-pdf"：不列印，子作業儲存到 spool_dir/saved/（測試模式，預設）
 # 實機列印時改為實際佇列名，如 "HP_LaserJet_1020"（lpstat -v 查看）
 real = "save-pdf"
+virtual_name = "dupriman-duplex"  # lpadmin 建立的虛擬佇列名，須與實際佇列一致
+
+[paths]
+# cupsd 執行 backend 所用的帳戶；留空則自動探測（先 lp，再 cups）
+backend_user = ""
 
 [duplex]
 even_order = "reverse"           # 背面頁序：reverse（倒序）| normal（正序）
@@ -118,12 +150,21 @@ allowed_users = ["alice"]         # 允許確認雙面工作的本地帳戶
 
 | 值 | 語言 |
 |---|---|
-| `auto` | 從 `LANG` / `LC_ALL` 自動偵測（預設） |
+| `auto` | 從 `LC_ALL` / `LC_MESSAGES` / `LANG` 自動偵測（預設） |
 | `en` / `en_US` | 英語 |
 | `zh_CN` | 簡體中文 |
 | `zh_TW` | 繁體中文 |
 
-翻譯檔案在 `/usr/share/dupriman/i18n/<locale>.toml`，可直接編輯或新增語言。
+所有翻譯都已**編譯進二進位檔**，因此安裝後的副本不需要額外的資料目錄。
+`/usr/share/dupriman/i18n/`（或二進位檔旁邊的 `./i18n/`）中的檔案會覆蓋內嵌版本，
+方便打包者不重新編譯就更新譯文。
+
+彈窗裡的放紙示意圖原始檔是 `assets/paper-orientation.svg`，由
+`scripts/render-diagram.sh` 轉成 `assets/paper-orientation.png` 後編譯進二進位檔。
+要改圖請編輯 SVG（不是 PNG），重跑該腳本再重新編譯。之所以轉成 PNG 而不直接
+內嵌 SVG，是因為 gdk-pixbuf 不一定帶 SVG loader（Arch 的 `librsvg` 只提供
+`rsvg-convert`，不裝 loader）。
+
 也可以直接在設定裡覆蓋任意文案（優先級最高）：
 
 ```toml
@@ -156,7 +197,7 @@ cancel_label = "停止"
 - **長邊翻轉**（預設）：適用於縱向文件，沿長邊翻轉（背面旋轉 180°）；
 - **短邊翻轉**：適用於橫向文件，沿短邊翻轉（背面不旋轉）。
 
-正面列印完成後，**不要翻轉或重新排序**——從輸出紙盤取出整疊紙，原樣放入進紙槽，然後點擊確定。
+正面列印完成後，**不要翻轉或重新排序**——從輸出紙盤取出整疊紙，原樣放入進紙槽，然後點擊確定。彈窗裡有一張示意圖說明這一點：**A** 代表文字方向，A 的頂端就是頁首；放入紙匣時 A 面（已列印面）朝**下**，頁首朝向**印表機**。
 
 ## 日誌與故障排除
 
@@ -164,6 +205,12 @@ cancel_label = "停止"
 - 彈窗守護行程：查看所選工作階段管理器的日誌
 - 自檢：`dupriman test`
 - 如果請求雙面列印時彈窗守護行程未執行：正面會正常列印，之後後端等待並在 `prompt.timeout_secs` 後安全中止。
+- **正面列印完後一直沒有彈窗，佇列裡工作一直等**：最常見的原因是**目前登入工作階段早於 `dupriman-<使用者>` 群組建立**。群組成員關係在登入時固定，所以新建群組後必須登出再登入，`dupriman prompt` 才能讀到 `requests/`。`dupriman test` 會明確回報「目前工作階段可讀取 bridge 目錄」一項未通過；守護行程啟動時也會直接以該原因結束，而不是空轉。臨時驗證可先 `newgrp dupriman-<使用者>`。
+- **早已取消的工作仍不斷彈出確認框**：`requests/` 裡的請求檔比它的後端活得久。現在彈窗會跳過後端 PID 已消失的請求（或超過 `prompt.timeout_secs + 60` 的），後端在寫入新請求前也會順手清理殘留檔案。舊版本寫的檔案沒有 PID，只能等 24 小時後清理；可立即用 `sudo rm /run/dupriman/<使用者>/requests/*.json` 清除。
+- **正面列印完後卡住，或報 "required account `lp` does not exist" / "prompt state ... is not provisioned"**：代表 bridge 目錄未供應，或後端執行在 DupriMan 未供應的帳戶下。用 `dupriman test` 檢查——它會顯示探測到的後端帳戶以及你帳戶所需的 `install -d` 指令。在 Arch/Fedora 上後端帳戶是 `cups`，不是 `lp`。
+- **`dupriman test` 報虛擬印表機缺失，但佇列可正常列印**：`printer.virtual_name` 必須與 `lpadmin` 建立的佇列名完全一致（區分大小寫）。`lpstat -v` 可列出真實佇列名。
+- **雖然設定了 `prompt.language = "zh_CN"`，對話框仍顯示英文**：明確的 `language` 總是優先，但 `auto` 跟隨 locale，且僅 `LANG=en_US.UTF-8` 就會選到英文，即使其他 `LC_*` 類別是中文。請明確設定 `language = "zh_CN"`，或匯出 `LC_MESSAGES=zh_CN.UTF-8`。
+- **雙面任務失敗後佇列變成 disabled**：後端非零結束會讓 CUPS 停用佇列。用 `cupsenable <佇列>` 重新啟用，用 `cancel -a <佇列>` 清掉卡住的作業。
 - 偵錯拆分結果：設定 `print.keep_temp = true`；暫存 PDF 將保留在 `paths.spool_dir` 中。
 
 ## 移除
@@ -185,8 +232,10 @@ cupstestppd <(./target/debug/dupriman ppd)   # 驗證 PPD
 2. 在 `src/i18n.rs` 中註冊（全部集中在一處）：
    - `Lang` 列舉：新增變體，帶上 serde rename 和 alias
    - `Lang::ALL`：加入新變體
-   - `Lang::from_env()`：新增從 `LANG`/`LC_ALL` 偵測語言的邏輯
+   - `Lang::from_env()`：新增從 `LC_ALL`/`LC_MESSAGES`/`LANG` 偵測語言的邏輯
    - `Lang::file_stem()`：對應到語言檔名
+   - `BUILTIN`：加入 `("<locale>", include_str!("../i18n/<locale>.toml"))`，
+     讓譯文一併編譯進二進位檔
 3. 更新[國際化](#國際化i18n)中的語言表（可選）。
 
 缺失的鍵會自動回退到 `en_US`。`dupriman ppd` 透過 `Lang::ALL` 自動發現所有語言，無需修改打包腳本。

@@ -154,6 +154,7 @@ name = "dupriman"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cairo-rs",
  "clap",
  "gtk4",
  "libc",

@@ -1,8 +1,10 @@
 //! Private file protocol between the CUPS backend and the graphical prompt.
 //!
 //! Production installations provision a root-owned state layout for every
-//! allowed user.  A dedicated `dupriman-<user>` group bridges CUPS's unprivileged
-//! `lp` account and that one user without exposing job metadata to other users.
+//! allowed user.  A dedicated `dupriman-<user>` group bridges the unprivileged
+//! account cupsd runs backends as and that one user without exposing job
+//! metadata to other users.  Upstream CUPS uses `lp`; some distributions
+//! (Arch) use `cups`, so the backend account is detected rather than assumed.
 //! Direct single-user test runs retain a private 0700 directory layout.
 
 use anyhow::{Context, Result, bail};
@@ -15,6 +17,10 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+/// Accounts cupsd may run backends as, in preference order: upstream CUPS
+/// default first, then the Arch Linux / Fedora convention.
+const BACKEND_ACCOUNTS: &[&str] = &["lp", "cups"];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptRequest {
     pub id: String,
@@ -23,6 +29,37 @@ pub struct PromptRequest {
     pub user: String,
     pub title: String,
     pub detail: String,
+    /// PID of the backend waiting for this answer.  CUPS can kill a backend
+    /// (job cancelled, queue disabled) without giving it a chance to clean up,
+    /// and the prompt directory is not writable by the desktop user, so the
+    /// request file would otherwise stay behind and re-open a dialog for a job
+    /// that no longer exists.  0 means "unknown" (older or test requests).
+    #[serde(default)]
+    pub pid: u32,
+}
+
+impl PromptRequest {
+    /// Whether the backend that asked is still alive.
+    pub fn is_live(&self) -> bool {
+        self.pid == 0 || Path::new(&format!("/proc/{}", self.pid)).exists()
+    }
+}
+
+/// Whether a request file is older than `max_age`.
+///
+/// A backend that CUPS killed cannot clean up after itself, and the desktop
+/// user has no write permission on `requests/`, so a leftover file otherwise
+/// re-opens its dialog forever.  Requests written by older versions carry no
+/// pid, which makes age the only available signal.
+fn is_stale(path: &Path, max_age: Option<Duration>) -> bool {
+    let Some(max_age) = max_age else {
+        return false;
+    };
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > max_age)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +130,26 @@ fn account_identity(name: &str) -> Result<(u32, u32)> {
         bail!("required account {:?} does not exist", name);
     }
     Ok((unsafe { (*entry).pw_uid }, unsafe { (*entry).pw_gid }))
+}
+
+/// Resolve the account cupsd runs backends as.
+///
+/// An explicit `paths.backend_user` wins.  Otherwise the configured accounts are
+/// tried in order and the first one that exists locally is used.  Debian/Ubuntu
+/// and upstream CUPS have `lp`; Arch Linux and Fedora only ship `cups`.
+pub fn backend_account(configured: &str) -> Result<(String, u32)> {
+    if !configured.is_empty() {
+        return Ok((configured.to_string(), account_identity(configured)?.0));
+    }
+    for candidate in BACKEND_ACCOUNTS {
+        if let Ok((uid, _)) = account_identity(candidate) {
+            return Ok((candidate.to_string(), uid));
+        }
+    }
+    bail!(
+        "cannot find the account cupsd runs backends as (tried {BACKEND_ACCOUNTS:?}); \
+         set paths.backend_user in the configuration"
+    )
 }
 
 fn bridge_gid(user: &str) -> Result<u32> {
@@ -212,33 +269,54 @@ fn direct_state(root: &Path, user: &str, identity: UserIdentity) -> Result<UserS
     })
 }
 
-fn bridge_state(root: &Path, user: &str, identity: UserIdentity) -> Result<UserState> {
+fn bridge_state(
+    root: &Path,
+    user: &str,
+    identity: UserIdentity,
+    configured_backend_user: &str,
+) -> Result<UserState> {
     let bridge_gid = bridge_gid(user)?;
-    let (cups_uid, _) = account_identity("lp")?;
     let user_dir = root.join(user);
+    let requests = user_dir.join("requests");
+    let responses = user_dir.join("responses");
+
+    // An existing requests directory names the backend account outright: its
+    // owner is whoever cupsd runs backends as on this system.
+    let backend_uid = match fs::symlink_metadata(&requests) {
+        Ok(metadata) => {
+            let uid = metadata.uid();
+            if uid == identity.uid {
+                bail!(
+                    "requests directory {} must not be owned by the submitting user",
+                    requests.display()
+                );
+            }
+            uid
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && euid() == 0 => {
+            backend_account(configured_backend_user)?.1
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => bail!(
+            "prompt state for {user:?} is not provisioned; root must create the bridge layout"
+        ),
+        Err(error) => {
+            return Err(error).with_context(|| format!("cannot inspect {}", requests.display()));
+        }
+    };
+
     if euid() == 0 {
         provision_dir(&user_dir, 0, 0, 0o711)?;
-        provision_dir(&user_dir.join("requests"), cups_uid, bridge_gid, 0o2750)?;
-        provision_dir(
-            &user_dir.join("responses"),
-            identity.uid,
-            bridge_gid,
-            0o2770,
-        )?;
+        provision_dir(&requests, backend_uid, bridge_gid, 0o2750)?;
+        provision_dir(&responses, identity.uid, bridge_gid, 0o2770)?;
     } else {
         secure_dir(&user_dir, 0, 0, 0o711)?;
-        secure_dir(&user_dir.join("requests"), cups_uid, bridge_gid, 0o2750)?;
-        secure_dir(
-            &user_dir.join("responses"),
-            identity.uid,
-            bridge_gid,
-            0o2770,
-        )?;
+        secure_dir(&requests, backend_uid, bridge_gid, 0o2750)?;
+        secure_dir(&responses, identity.uid, bridge_gid, 0o2770)?;
     }
     Ok(UserState {
-        requests: user_dir.join("requests"),
-        responses: user_dir.join("responses"),
-        request_uid: cups_uid,
+        requests,
+        responses,
+        request_uid: backend_uid,
         request_gid: Some(bridge_gid),
         request_mode: 0o640,
         response_uid: identity.uid,
@@ -247,16 +325,18 @@ fn bridge_state(root: &Path, user: &str, identity: UserIdentity) -> Result<UserS
     })
 }
 
-pub fn user_state(root: &Path, user: &str) -> Result<UserState> {
+pub fn user_state(root: &Path, user: &str, configured_backend_user: &str) -> Result<UserState> {
     let identity = user_identity(user)?;
     secure_state_root(root, identity)?;
     let dir = root.join(user);
     match fs::symlink_metadata(&dir) {
-        Ok(metadata) if metadata.uid() == 0 => bridge_state(root, user, identity),
+        Ok(metadata) if metadata.uid() == 0 => {
+            bridge_state(root, user, identity, configured_backend_user)
+        }
         Ok(metadata) if metadata.uid() == identity.uid => direct_state(root, user, identity),
         Ok(_) => bail!("prompt directory {} has an unexpected owner", dir.display()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && euid() == 0 => {
-            bridge_state(root, user, identity)
+            bridge_state(root, user, identity, configured_backend_user)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && euid() == identity.uid => {
             direct_state(root, user, identity)
@@ -300,16 +380,51 @@ fn secure_file(path: &Path, uid: u32, gid: Option<u32>, mode: u32) -> Result<()>
     Ok(())
 }
 
+/// Remove request files whose backend is gone or that are long past any
+/// possible answer.  Best effort: a failure here must never block a print.
+fn sweep_stale(state: &UserState) {
+    let Ok(entries) = fs::read_dir(state.requests_dir()) else {
+        return;
+    };
+    for path in entries.filter_map(|entry| entry.ok()).map(|e| e.path()) {
+        let is_request = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("req-") && name.ends_with(".json"));
+        if !is_request {
+            continue;
+        }
+        // Requests written by older versions carry no pid, so fall back to a
+        // generous age bound for those.
+        let stale = is_stale(&path, Some(Duration::from_secs(24 * 60 * 60)))
+            || fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<PromptRequest>(&bytes).ok())
+                .is_some_and(|request| !request.is_live());
+        if stale {
+            fs::remove_file(&path).ok();
+        }
+    }
+}
+
 /// Send a private request and return the recipient's state and identity.
-pub fn send_request(root: &Path, req: &PromptRequest) -> Result<(UserState, UserIdentity)> {
+pub fn send_request(
+    root: &Path,
+    req: &PromptRequest,
+    configured_backend_user: &str,
+) -> Result<(UserState, UserIdentity)> {
     let identity = user_identity(&req.user)?;
-    let state = user_state(root, &req.user)?;
+    let state = user_state(root, &req.user, configured_backend_user)?;
     if euid() != 0 && euid() != state.request_uid {
         bail!(
             "backend user cannot write prompt requests for {:?}",
             req.user
         );
     }
+    // The desktop user can read `requests/` but not unlink in it, so only the
+    // backend can clear files left by jobs CUPS killed.  Do it while holding
+    // write access, before adding a new one.
+    sweep_stale(&state);
     let path = request_path(&state, &req.id);
     let mut file = OpenOptions::new()
         .write(true)
@@ -383,10 +498,20 @@ pub fn cleanup(state: &UserState, id: &str) {
     fs::remove_file(response_path(state, id)).ok();
 }
 
-pub fn pending_requests(state: &UserState) -> Vec<(PathBuf, PromptRequest)> {
-    let mut items: Vec<(PathBuf, PromptRequest)> = fs::read_dir(state.requests_dir())
-        .into_iter()
-        .flatten()
+/// List the requests awaiting a decision.
+///
+/// Returns an error when the directory cannot be read at all.  That failure is
+/// the difference between "nothing to ask" and "the daemon cannot see the
+/// bridge", and silently treating the two alike leaves a job stalled forever
+/// with no visible reason.  Requests whose backend has already exited are
+/// skipped: the answer would go nowhere.
+pub fn pending_requests(
+    state: &UserState,
+    max_age: Option<Duration>,
+) -> Result<Vec<(PathBuf, PromptRequest)>> {
+    let entries = fs::read_dir(state.requests_dir())
+        .with_context(|| format!("cannot read {}", state.requests_dir().display()))?;
+    let mut items: Vec<(PathBuf, PromptRequest)> = entries
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|path| {
@@ -403,13 +528,25 @@ pub fn pending_requests(state: &UserState) -> Vec<(PathBuf, PromptRequest)> {
             )
             .is_ok()
         })
+        .filter(|path| !is_stale(path, max_age))
         .filter_map(|path| {
             let request = serde_json::from_slice::<PromptRequest>(&fs::read(&path).ok()?).ok()?;
-            Some((path, request))
+            request.is_live().then_some((path, request))
         })
         .collect();
     items.sort_by(|left, right| left.0.cmp(&right.0));
-    items
+    Ok(items)
+}
+
+/// Resolve a group name to its gid, if it exists.
+pub fn group_id(name: &str) -> Option<u32> {
+    let name = CString::new(name).ok()?;
+    let entry = unsafe { libc::getgrnam(name.as_ptr()) };
+    if entry.is_null() {
+        None
+    } else {
+        Some(unsafe { (*entry).gr_gid })
+    }
 }
 
 pub fn send_response(state: &UserState, response: &PromptResponse) -> Result<()> {
@@ -444,6 +581,48 @@ mod tests {
         std::env::var("USER").expect("tests require USER")
     }
 
+    /// Regression: the backend account must be detected, never hardcoded to
+    /// `lp`.  Arch Linux ships only `cups`, so `account_identity("lp")` used to
+    /// abort every duplex job there ("required account \"lp\" does not exist").
+    #[test]
+    fn backend_account_is_detected_not_assumed() {
+        // At least one of the configured candidates must exist on any host that
+        // actually runs CUPS; on hosts without either, an explicit override wins.
+        let detected = backend_account("");
+        match detected {
+            Ok((name, uid)) => {
+                assert!(BACKEND_ACCOUNTS.contains(&name.as_str()));
+                assert_ne!(uid, 0, "backend account must not be root");
+            }
+            Err(_) => {
+                // Neither lp nor cups installed: an explicit name still resolves,
+                // and an unknown name fails with a diagnosable message.
+                assert!(backend_account("definitely-not-a-user").is_err());
+            }
+        }
+        // An explicit configuration value bypasses detection entirely.
+        let me = current_user();
+        assert_eq!(backend_account(&me).unwrap().0, me);
+    }
+
+    /// Regression: an existing `requests/` directory is authoritative for the
+    /// backend uid, so a layout provisioned for `cups` works even where `lp`
+    /// does not exist.
+    #[test]
+    fn existing_requests_dir_names_the_backend_account() {
+        let root =
+            std::env::temp_dir().join(format!("dupriman-proto-owner-{}", std::process::id()));
+        fs::remove_dir_all(&root).ok();
+        fs::create_dir(&root).unwrap();
+        let user = current_user();
+        let requests = root.join(&user).join("requests");
+        fs::create_dir_all(&requests).unwrap();
+        // Owned by us, so bridge_state rejects it rather than trusting it.
+        let identity = user_identity(&user).unwrap();
+        assert!(bridge_state(&root, &user, identity, "").is_err());
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn request_response_roundtrip_is_private() {
         let root = std::env::temp_dir().join(format!("dupriman-proto-{}", std::process::id()));
@@ -457,8 +636,9 @@ mod tests {
             user,
             title: "test document".into(),
             detail: "10 pages".into(),
+            pid: std::process::id(),
         };
-        let (state, identity) = send_request(&root, &request).unwrap();
+        let (state, identity) = send_request(&root, &request, "").unwrap();
         assert_eq!(
             fs::metadata(state.requests_dir())
                 .unwrap()
@@ -475,7 +655,7 @@ mod tests {
                 & 0o777,
             0o600
         );
-        assert_eq!(pending_requests(&state).len(), 1);
+        assert_eq!(pending_requests(&state, None).unwrap().len(), 1);
         send_response(
             &state,
             &PromptResponse {
@@ -511,8 +691,9 @@ mod tests {
             user: current_user(),
             title: "test document".into(),
             detail: String::new(),
+            pid: std::process::id(),
         };
-        let (state, identity) = send_request(&root, &request).unwrap();
+        let (state, identity) = send_request(&root, &request, "").unwrap();
         send_response(
             &state,
             &PromptResponse {
@@ -534,6 +715,68 @@ mod tests {
             )
             .is_err()
         );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// CUPS can kill a backend without letting it clean up, and the desktop
+    /// user cannot unlink files in `requests/` (the group has r-x, not rwx).  A
+    /// stale request must therefore be ignored rather than re-prompted.
+    #[test]
+    fn requests_from_dead_backends_are_ignored() {
+        let request = PromptRequest {
+            id: "dead".into(),
+            capability: random_token().unwrap(),
+            job_id: "7".into(),
+            user: current_user(),
+            title: "killed job".into(),
+            detail: String::new(),
+            // 0 means "unknown" and must never be filtered.
+            pid: 0,
+        };
+        assert!(request.is_live());
+
+        let mut gone = request.clone();
+        gone.pid = 4_000_000;
+        assert!(!gone.is_live(), "a dead backend must not keep prompting");
+
+        let mut alive = request;
+        alive.pid = std::process::id();
+        assert!(alive.is_live());
+    }
+
+    /// A request written by an older version has no pid, so age is the only
+    /// signal that the job is gone.
+    #[test]
+    fn stale_requests_are_dropped_by_age() {
+        let root = std::env::temp_dir().join(format!("dupriman-stale-{}", std::process::id()));
+        fs::remove_dir_all(&root).ok();
+        fs::create_dir(&root).unwrap();
+        let request = PromptRequest {
+            id: "t3".into(),
+            capability: random_token().unwrap(),
+            job_id: "44".into(),
+            user: current_user(),
+            title: "old job".into(),
+            detail: String::new(),
+            pid: 0,
+        };
+        let (state, _) = send_request(&root, &request, "").unwrap();
+
+        // A generous age bound still reports the live request.
+        assert_eq!(
+            pending_requests(&state, Some(Duration::from_secs(3600)))
+                .unwrap()
+                .len(),
+            1
+        );
+        // A zero bound treats every existing file as stale.
+        assert!(
+            pending_requests(&state, Some(Duration::ZERO))
+                .unwrap()
+                .is_empty()
+        );
+        // Without a bound nothing is filtered out.
+        assert_eq!(pending_requests(&state, None).unwrap().len(), 1);
         fs::remove_dir_all(&root).ok();
     }
 }

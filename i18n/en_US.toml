@@ -1,9 +1,14 @@
 # DupriMan translations — English (US) [fallback language]
 
 title = "Duplex Printing"
-message = "Take the paper out of the printer and insert it into the paper tray without changing its orientation."
+message = "Take the sheets out of the output tray and load them back into the paper tray as shown below."
 ok_label = "OK"
 cancel_label = "Cancel"
+
+# Orientation diagram shown above the task details.
+#   "A" marks the text direction; its top edge is the head of the page.
+diagram_caption_1 = "\"A\" marks the text direction - the top of the A is the head of the page"
+diagram_caption_2 = "In the tray: the printed side (A) faces down, head of the page toward the printer"
 
 # Backend detail message shown in the dialog. Placeholders:
 #   {job_id} {title} {total} {evens}
@@ -44,6 +49,7 @@ ppd_duplex_short_edge = "On (short-edge)"
 # ---- CLI error messages (main.rs) ----
 cli_args_error = "Argument error"
 cli_prompt_failed = "Prompt daemon failed to start"
+cli_group_missing = "this session does not hold group {group} (gid {gid}); log out and back in so the new group membership takes effect"
 cli_install_failed = "Installation failed"
 cli_uninstall_failed = "Uninstallation failed"
 cli_config_warning = "Warning: config loading failed, using defaults"
@@ -60,10 +66,16 @@ test_printers_header = "Printers:"
 test_real_printer_fmt = "Real printer {name} exists"
 test_real_printer_hint = "run lpstat -v and update printer.real in config"
 test_virtual_printer_fmt = "Virtual printer {name} registered"
-test_virtual_printer_hint = "run sudo dupriman install"
+test_virtual_printer_hint = "register the queue with `sudo lpadmin -p <queue-name> -v dupriman://duplex -P /usr/share/cups/model/dupriman.ppd -E`"
 test_runtime_header = "Runtime:"
 test_state_dir_fmt = "State directory {path} exists"
-test_state_dir_hint = "run sudo dupriman install"
+test_state_dir_hint = "create it root-owned and not group/world writable (0711)"
+test_backend_account_fmt = "Backend account {name} exists"
+test_backend_account_hint = "no lp or cups account found; set paths.backend_user in the configuration"
+test_bridge_dir_fmt = "Bridge layout for {user} provisioned ({path})"
+test_bridge_dir_hint = "provision the layout: sudo install -d -o root -g root -m 0711 {user_dir} && sudo install -d -o {backend} -g dupriman-{user} -m 2750 {path} && sudo install -d -o {user} -g dupriman-{user} -m 2770 {responses}"
+test_bridge_group_fmt = "This session can read the bridge directory (group {group})"
+test_bridge_group_hint = "this session predates the group: log out and back in, then restart `dupriman prompt` (group membership is fixed at login)"
 test_prompt_label = "Prompt daemon running"
 test_prompt_hint = "run systemctl --user start dupriman-prompt"
 

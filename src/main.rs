@@ -7,6 +7,7 @@
 
 mod backend;
 mod config;
+mod diagram;
 mod i18n;
 mod options;
 mod pdf;
@@ -206,6 +207,61 @@ fn self_test(cfg: &Config) -> i32 {
         state_ok,
         &cfg.prompt.cli("test_state_dir_hint"),
     );
+
+    // The backend account is detected, not assumed: upstream CUPS uses `lp`,
+    // Arch/Fedora only ship `cups`.  Report which one was found.
+    let backend = prompt_proto::backend_account(&cfg.paths.backend_user).ok();
+    let backend_name = backend
+        .as_ref()
+        .map(|(name, _)| name.clone())
+        .unwrap_or_else(|| cfg.paths.backend_user.clone());
+    check(
+        &cfg.prompt
+            .cli_fmt("test_backend_account_fmt", &[("name", &backend_name)]),
+        backend.is_some(),
+        &cfg.prompt.cli("test_backend_account_hint"),
+    );
+
+    // Every allowed user needs the bridge layout; a missing requests/ directory
+    // is what makes the prompt daemon fail at runtime.
+    for user in &cfg.prompt.allowed_users {
+        let requests = cfg.paths.state_dir.join(user).join("requests");
+        let requests_display = requests.display().to_string();
+        let responses = cfg.paths.state_dir.join(user).join("responses");
+        let user_dir = cfg.paths.state_dir.join(user);
+        check(
+            &cfg.prompt.cli_fmt(
+                "test_bridge_dir_fmt",
+                &[("user", user), ("path", &requests_display)],
+            ),
+            requests.is_dir(),
+            &cfg.prompt.cli_fmt(
+                "test_bridge_dir_hint",
+                &[
+                    ("user", user),
+                    ("path", &requests_display),
+                    ("user_dir", &user_dir.display().to_string()),
+                    ("responses", &responses.display().to_string()),
+                    ("backend", &backend_name),
+                ],
+            ),
+        );
+
+        // Group membership is captured at login.  An account added to a freshly
+        // created bridge group keeps a session that cannot read requests until
+        // it logs out and back in, which looks exactly like "no dialog appears".
+        // Probe the directory rather than the group table.
+        let group = format!("dupriman-{user}");
+        let reachable = requests.is_dir() && std::fs::read_dir(&requests).is_ok();
+        check(
+            &cfg.prompt
+                .cli_fmt("test_bridge_group_fmt", &[("group", &group)]),
+            reachable,
+            &cfg.prompt
+                .cli_fmt("test_bridge_group_hint", &[("group", &group)]),
+        );
+    }
+
     check(
         "prompt users configured",
         !cfg.prompt.allowed_users.is_empty(),

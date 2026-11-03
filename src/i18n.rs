@@ -30,10 +30,18 @@ impl Lang {
     /// All supported languages (keep in sync with the enum variants)
     pub const ALL: &[Lang] = &[Lang::En, Lang::ZhCn, Lang::ZhTw];
 
-    /// Detect language from environment (`LC_ALL` / `LANG`)
+    /// Detect language from environment (`LC_ALL` / `LC_MESSAGES` / `LANG`)
     pub fn from_env() -> Self {
+        // POSIX message-category precedence: LC_ALL > LC_MESSAGES > LANG.
         let env = std::env::var("LC_ALL")
-            .or_else(|_| std::env::var("LANG"))
+            .ok()
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                std::env::var("LC_MESSAGES")
+                    .ok()
+                    .filter(|value| !value.is_empty())
+            })
+            .or_else(|| std::env::var("LANG").ok())
             .unwrap_or_default()
             .to_lowercase();
         if env.contains("zh_tw") || env.contains("zh_hk") {
@@ -63,6 +71,8 @@ pub struct Texts {
     pub message: String,
     pub ok_label: String,
     pub cancel_label: String,
+    pub diagram_caption_1: String,
+    pub diagram_caption_2: String,
     pub detail: String,
     pub detail_with_blank: String,
     pub cli_job_completed: String,
@@ -94,6 +104,7 @@ pub struct Texts {
     pub ppd_duplex_short_edge: String,
     pub cli_args_error: String,
     pub cli_prompt_failed: String,
+    pub cli_group_missing: String,
     pub cli_install_failed: String,
     pub cli_uninstall_failed: String,
     pub cli_config_warning: String,
@@ -112,6 +123,12 @@ pub struct Texts {
     pub test_runtime_header: String,
     pub test_state_dir_fmt: String,
     pub test_state_dir_hint: String,
+    pub test_backend_account_fmt: String,
+    pub test_backend_account_hint: String,
+    pub test_bridge_dir_fmt: String,
+    pub test_bridge_dir_hint: String,
+    pub test_bridge_group_fmt: String,
+    pub test_bridge_group_hint: String,
     pub test_prompt_label: String,
     pub test_prompt_hint: String,
     pub install_root_required: String,
@@ -156,6 +173,8 @@ impl Texts {
             "message" => &self.message,
             "ok_label" => &self.ok_label,
             "cancel_label" => &self.cancel_label,
+            "diagram_caption_1" => &self.diagram_caption_1,
+            "diagram_caption_2" => &self.diagram_caption_2,
             "detail" => &self.detail,
             "detail_with_blank" => &self.detail_with_blank,
             "cli_job_completed" => &self.cli_job_completed,
@@ -187,6 +206,7 @@ impl Texts {
             "ppd_duplex_short_edge" => &self.ppd_duplex_short_edge,
             "cli_args_error" => &self.cli_args_error,
             "cli_prompt_failed" => &self.cli_prompt_failed,
+            "cli_group_missing" => &self.cli_group_missing,
             "cli_install_failed" => &self.cli_install_failed,
             "cli_uninstall_failed" => &self.cli_uninstall_failed,
             "cli_config_warning" => &self.cli_config_warning,
@@ -205,6 +225,12 @@ impl Texts {
             "test_runtime_header" => &self.test_runtime_header,
             "test_state_dir_fmt" => &self.test_state_dir_fmt,
             "test_state_dir_hint" => &self.test_state_dir_hint,
+            "test_backend_account_fmt" => &self.test_backend_account_fmt,
+            "test_backend_account_hint" => &self.test_backend_account_hint,
+            "test_bridge_dir_fmt" => &self.test_bridge_dir_fmt,
+            "test_bridge_dir_hint" => &self.test_bridge_dir_hint,
+            "test_bridge_group_fmt" => &self.test_bridge_group_fmt,
+            "test_bridge_group_hint" => &self.test_bridge_group_hint,
             "test_prompt_label" => &self.test_prompt_label,
             "test_prompt_hint" => &self.test_prompt_hint,
             "install_root_required" => &self.install_root_required,
@@ -245,19 +271,33 @@ impl Texts {
     }
 }
 
-/// Built-in English fallback (compiled into the binary)
-const EN_US: &str = include_str!("../i18n/en_US.toml");
+/// Built-in translations, compiled into the binary so an installed copy needs
+/// no separate data directory.  External files may still override them.
+const BUILTIN: &[(&str, &str)] = &[
+    ("en_US", include_str!("../i18n/en_US.toml")),
+    ("zh_CN", include_str!("../i18n/zh_CN.toml")),
+    ("zh_TW", include_str!("../i18n/zh_TW.toml")),
+];
 
 static CACHE: OnceLock<HashMap<&'static str, Texts>> = OnceLock::new();
 
 /// Load translations for all languages, with fallback chain:
-/// locale file -> en_US file -> built-in en_US
+/// locale file -> built-in locale -> built-in en_US
 fn load_all() -> HashMap<&'static str, Texts> {
-    let en: Texts = toml::from_str(EN_US).unwrap_or_default();
+    let en: Texts = toml::from_str(
+        BUILTIN
+            .iter()
+            .find(|(stem, _)| *stem == "en_US")
+            .map(|(_, text)| *text)
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default();
     let mut map = HashMap::new();
     for &lang in Lang::ALL {
         let stem = lang.file_stem();
-        let mut texts = load_file(stem).unwrap_or_else(|| en.clone());
+        let mut texts = load_file(stem)
+            .or_else(|| builtin(stem))
+            .unwrap_or_else(|| en.clone());
         // Fill any missing keys from en_US fallback
         let en = map.get("en_US").cloned().unwrap_or_else(|| en.clone());
         for key in [
@@ -265,6 +305,8 @@ fn load_all() -> HashMap<&'static str, Texts> {
             "message",
             "ok_label",
             "cancel_label",
+            "diagram_caption_1",
+            "diagram_caption_2",
             "detail",
             "detail_with_blank",
             "cli_job_completed",
@@ -296,6 +338,7 @@ fn load_all() -> HashMap<&'static str, Texts> {
             "ppd_duplex_short_edge",
             "cli_args_error",
             "cli_prompt_failed",
+            "cli_group_missing",
             "cli_install_failed",
             "cli_uninstall_failed",
             "cli_config_warning",
@@ -314,6 +357,12 @@ fn load_all() -> HashMap<&'static str, Texts> {
             "test_runtime_header",
             "test_state_dir_fmt",
             "test_state_dir_hint",
+            "test_backend_account_fmt",
+            "test_backend_account_hint",
+            "test_bridge_dir_fmt",
+            "test_bridge_dir_hint",
+            "test_bridge_group_fmt",
+            "test_bridge_group_hint",
             "test_prompt_label",
             "test_prompt_hint",
             "install_root_required",
@@ -367,6 +416,8 @@ fn set(texts: &mut Texts, key: &str, value: &str) {
         "message" => texts.message = v,
         "ok_label" => texts.ok_label = v,
         "cancel_label" => texts.cancel_label = v,
+        "diagram_caption_1" => texts.diagram_caption_1 = v,
+        "diagram_caption_2" => texts.diagram_caption_2 = v,
         "detail" => texts.detail = v,
         "detail_with_blank" => texts.detail_with_blank = v,
         "cli_job_completed" => texts.cli_job_completed = v,
@@ -398,6 +449,7 @@ fn set(texts: &mut Texts, key: &str, value: &str) {
         "ppd_duplex_short_edge" => texts.ppd_duplex_short_edge = v,
         "cli_args_error" => texts.cli_args_error = v,
         "cli_prompt_failed" => texts.cli_prompt_failed = v,
+        "cli_group_missing" => texts.cli_group_missing = v,
         "cli_install_failed" => texts.cli_install_failed = v,
         "cli_uninstall_failed" => texts.cli_uninstall_failed = v,
         "cli_config_warning" => texts.cli_config_warning = v,
@@ -416,6 +468,12 @@ fn set(texts: &mut Texts, key: &str, value: &str) {
         "test_runtime_header" => texts.test_runtime_header = v,
         "test_state_dir_fmt" => texts.test_state_dir_fmt = v,
         "test_state_dir_hint" => texts.test_state_dir_hint = v,
+        "test_backend_account_fmt" => texts.test_backend_account_fmt = v,
+        "test_backend_account_hint" => texts.test_backend_account_hint = v,
+        "test_bridge_dir_fmt" => texts.test_bridge_dir_fmt = v,
+        "test_bridge_dir_hint" => texts.test_bridge_dir_hint = v,
+        "test_bridge_group_fmt" => texts.test_bridge_group_fmt = v,
+        "test_bridge_group_hint" => texts.test_bridge_group_hint = v,
         "test_prompt_label" => texts.test_prompt_label = v,
         "test_prompt_hint" => texts.test_prompt_hint = v,
         "install_root_required" => texts.install_root_required = v,
@@ -452,6 +510,14 @@ fn set(texts: &mut Texts, key: &str, value: &str) {
         "duplex_short_edge" => texts.duplex_short_edge = v,
         _ => {}
     }
+}
+
+/// Parse a built-in locale, if present.
+fn builtin(stem: &str) -> Option<Texts> {
+    BUILTIN
+        .iter()
+        .find(|(name, _)| *name == stem)
+        .and_then(|(_, text)| toml::from_str(text).ok())
 }
 
 /// Try to load `i18n/<stem>.toml` from known locations
@@ -533,6 +599,34 @@ mod tests {
         assert!(map.contains_key("en_US"));
         assert!(map.contains_key("zh_CN"));
         assert!(map.contains_key("zh_TW"));
+    }
+
+    /// Regression: an installed binary has no `./i18n` next to it, so the
+    /// translations must be compiled in.  Otherwise a `language = "zh_CN"`
+    /// configuration silently renders English.
+    #[test]
+    fn builtin_translations_are_embedded() {
+        for &lang in Lang::ALL {
+            let texts = builtin(lang.file_stem())
+                .unwrap_or_else(|| panic!("{:?} is not embedded", lang.file_stem()));
+            assert!(
+                !texts.title.is_empty(),
+                "{:?} has an empty title",
+                lang.file_stem()
+            );
+        }
+        assert_eq!(builtin("zh_CN").unwrap().title, "双面打印");
+        // The dialog's picture is useless without its captions.
+        for &lang in Lang::ALL {
+            let t = builtin(lang.file_stem()).unwrap();
+            assert!(
+                !t.diagram_caption_1.is_empty() && !t.diagram_caption_2.is_empty(),
+                "{:?} is missing the diagram captions",
+                lang.file_stem()
+            );
+        }
+        assert_eq!(builtin("zh_TW").unwrap().title, "雙面列印");
+        assert_eq!(builtin("zh_CN").unwrap().ppd_duplex, "双面打印");
     }
 
     #[test]

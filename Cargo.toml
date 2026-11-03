@@ -13,6 +13,9 @@ serde_json = "1"
 toml = "0.8"
 # GTK4 原生弹窗（弹窗守护进程使用；需系统安装 gtk4 >= 4.10）
 gtk4 = { version = "0.10", features = ["v4_10"] }
+# 只为启用 `ImageSurface::create_from_png`（gtk4 已间接依赖 cairo-rs，
+# 这里显式打开 png feature 不会引入新 crate）。
+cairo-rs = { version = "0.21", features = ["png"] }
 libc = "0.2"
 
 [profile.release]
